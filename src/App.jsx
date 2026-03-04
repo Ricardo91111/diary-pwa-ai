@@ -1,7 +1,7 @@
 // src/App.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useAnimationControls } from "framer-motion";
-import { ChevronLeft, ChevronRight, Copy, FileText, Send, Trash2, X } from "lucide-react";
+import { ArrowLeft, Book, CheckSquare, ChevronLeft, ChevronRight, Copy, FileText, Send, Trash2, X } from "lucide-react";
 import InstallPrompt from "./InstallPrompt.jsx";
 
 const weekdayMap = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
@@ -47,7 +47,20 @@ const weekdayShortMap = ["周日", "周一", "周二", "周三", "周四", "周�
 
 const formatWeekdayShort = (key) => weekdayShortMap[dateKeyToDate(key).getDay()];
 
+const enWeekdayMap = ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"];
+
 const STORAGE_KEY = "diary_tasks";
+
+const DIARIES_KEY = "diary_daily_entries";
+
+const getInitialDiaries = () => {
+  if (typeof window === "undefined") return {};
+  try {
+    const stored = window.localStorage.getItem(DIARIES_KEY);
+    if (stored) return JSON.parse(stored);
+  } catch {}
+  return {};
+};
 
 const AI_SUMMARY_URL = "/api/weekly-summary";
 const AI_SUMMARY_TIMEOUT_MS = 20000;
@@ -225,6 +238,14 @@ function App() {
   const [aiError, setAiError] = useState(null);
   const [aiResult, setAiResult] = useState(null);
 
+  const [diaries, setDiaries] = useState(getInitialDiaries);
+  const [viewMode, setViewMode] = useState("home");
+  const [diaryMode, setDiaryMode] = useState("read");
+  const [diaryInput, setDiaryInput] = useState("");
+  const [showMention, setShowMention] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [mentionCursorPos, setMentionCursorPos] = useState(null);
+
   const selectedDateLabel = useMemo(() => formatDateLabel(selectedDate), [selectedDate]);
   const isToday = selectedDate === todayKey;
 
@@ -260,6 +281,12 @@ function App() {
       setAiResult(null);
     }
   }, [isWeeklyOpen]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(DIARIES_KEY, JSON.stringify(diaries));
+    } catch {}
+  }, [diaries]);
 
   const handleAddTask = () => {
     const text = input.trim();
@@ -301,6 +328,73 @@ function App() {
 
   const handlePrevDay = () => setSelectedDate((prev) => addDaysToKey(prev, -1));
   const handleNextDay = () => setSelectedDate((prev) => addDaysToKey(prev, 1));
+
+  const handleDiaryChange = (e) => {
+    const val = e.target.value;
+    setDiaryInput(val);
+    const cursorPos = e.target.selectionStart;
+    const textBeforeCursor = val.slice(0, cursorPos);
+    const match = textBeforeCursor.match(/@([^\s@]*)$/);
+    if (match) {
+      setMentionQuery(match[1].toLowerCase());
+      setShowMention(true);
+      setMentionCursorPos(cursorPos - match[1].length - 1);
+    } else {
+      setShowMention(false);
+    }
+  };
+
+  const handleSelectMention = (taskText) => {
+    const before = diaryInput.slice(0, mentionCursorPos);
+    const after = diaryInput.slice(mentionCursorPos + 1 + mentionQuery.length);
+    const insertText = `\n> 🎯 任务：${taskText}\n`;
+    setDiaryInput(before + insertText + after);
+    setShowMention(false);
+  };
+
+  const handleSaveDiary = () => {
+    setDiaries((prev) => ({
+      ...prev,
+      [selectedDate]: diaryInput
+    }));
+    setDiaryMode("read");
+  };
+
+  const handleEditDiary = () => {
+    setDiaryInput(diaries[selectedDate] || "");
+    setDiaryMode("edit");
+  };
+
+  const renderDiaryContent = (text) => {
+    if (!text)
+      return (
+        <p className="text-sm text-gray-400 mt-4 text-center">
+          今天还没有写日记，点击右上角开始记录吧...
+        </p>
+      );
+    return text.split("\n").map((line, i) => {
+      if (line.startsWith("> 🎯 任务：")) {
+        const taskName = line.replace("> 🎯 任务：", "").trim();
+        return (
+          <div
+            key={i}
+            className="my-3 p-3 bg-indigo-50/80 border-l-4 border-indigo-400 rounded-r-xl shadow-sm"
+          >
+            <span className="text-xs font-semibold text-indigo-500 mb-1 flex items-center gap-1">
+              <div className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+              关联任务
+            </span>
+            <p className="text-sm text-gray-800 font-medium">{taskName}</p>
+          </div>
+        );
+      }
+      return (
+        <p key={i} className="text-sm text-gray-700 min-h-[1.5rem] leading-relaxed">
+          {line}
+        </p>
+      );
+    });
+  };
 
   const weeklyReport = useMemo(() => {
     const end = selectedDate;
@@ -467,97 +561,182 @@ function App() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4 py-6">
       <InstallPrompt />
-      <div className="w-full max-w-md bg-white rounded-3xl shadow-lg flex flex-col overflow-hidden relative">
-        {/* 顶部日期区 */}
-        <header className="px-5 pt-4 pb-3 border-b border-gray-100">
-          <div className="flex items-center justify-between">
-            <button
-              type="button"
-              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 text-gray-500 bg-white active:scale-95 transition-transform"
-              onClick={handlePrevDay}
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
+      <div className="w-full max-w-md bg-[#fdfcf9] rounded-3xl shadow-xl flex flex-col overflow-hidden relative h-screen max-h-[90vh]">
 
-            <div className="flex flex-col items-center gap-0.5">
-              <span className="text-xs font-medium tracking-wide text-indigo-500 uppercase">
-                {isToday ? "今天" : "日期"}
+        {/* =============== 1. 首页视图 (Home) =============== */}
+        {viewMode === "home" && (
+          <div className="flex flex-col h-full w-full relative">
+            <header className="px-5 pt-6 pb-2 flex justify-between items-center z-10">
+              <button type="button" onClick={handlePrevDay} className="p-2.5 rounded-full border border-gray-200 text-gray-400 bg-white hover:text-gray-600 active:scale-95 transition-transform">
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <button type="button" onClick={() => setIsWeeklyOpen(true)} className="p-2.5 rounded-full border border-gray-200 text-gray-500 bg-white hover:bg-gray-50 active:scale-95 transition-transform">
+                <FileText className="w-4 h-4" />
+              </button>
+              <button type="button" onClick={handleNextDay} className="p-2.5 rounded-full border border-gray-200 text-gray-400 bg-white hover:text-gray-600 active:scale-95 transition-transform">
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </header>
+
+            <div className="flex-1 flex flex-col items-center justify-center -mt-16">
+              <span className="text-sm font-medium tracking-[0.2em] text-gray-400 uppercase mb-3">
+                {isToday ? "Today" : selectedDate}
               </span>
-              <span className="text-base font-semibold text-gray-900">
-                {selectedDateLabel}
-                {isToday && <span className="ml-1 text-sm font-medium text-gray-400">(今天)</span>}
-              </span>
+              <h1 className="text-5xl sm:text-6xl font-serif text-slate-800 tracking-widest text-center px-4">
+                {enWeekdayMap[dateKeyToDate(selectedDate).getDay()]}
+              </h1>
+              <p className="mt-4 text-sm text-gray-400">{formatWeekdayShort(selectedDate)}</p>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="px-5 pb-8 flex gap-4 w-full">
               <button
                 type="button"
-                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-full border border-gray-200 text-gray-600 bg-white px-3 active:scale-95 transition-transform"
-                onClick={() => setIsWeeklyOpen(true)}
+                onClick={() => setViewMode("tasks")}
+                className="flex-1 h-44 rounded-[2rem] bg-[#9cb3c9] text-white p-5 flex flex-col justify-between shadow-md shadow-[#9cb3c9]/30 active:scale-95 transition-transform text-left"
               >
-                <FileText className="h-4 w-4" />
-                <span className="text-sm font-medium">周报</span>
+                <div className="w-10 h-10 rounded-full bg-white/25 flex items-center justify-center backdrop-blur-sm">
+                  <CheckSquare className="text-white w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-semibold mb-1">任务</h3>
+                  <p className="text-sm text-white/80">{filteredTasks.length} 个待办</p>
+                </div>
               </button>
+
               <button
                 type="button"
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 text-gray-500 bg-white active:scale-95 transition-transform"
-                onClick={handleNextDay}
+                onClick={() => { setViewMode("diary"); setDiaryMode("read"); }}
+                className="flex-1 h-44 rounded-[2rem] bg-[#c2a8a4] text-white p-5 flex flex-col justify-between shadow-md shadow-[#c2a8a4]/30 active:scale-95 transition-transform text-left"
               >
-                <ChevronRight className="h-4 w-4" />
+                <div className="w-10 h-10 rounded-full bg-white/25 flex items-center justify-center backdrop-blur-sm">
+                  <Book className="text-white w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-semibold mb-1">日记</h3>
+                  <p className="text-sm text-white/80">{diaries[selectedDate] ? "已记录" : "未记录"}</p>
+                </div>
               </button>
             </div>
           </div>
-        </header>
+        )}
 
-        {/* 任务列表区 */}
-        <main className="flex-1 px-5 pt-4 pb-24 overflow-y-auto bg-gradient-to-b from-white via-white to-gray-50">
-          <section>
-            <h2 className="mb-3 text-sm font-medium text-gray-500 tracking-wide">
-              {isToday ? "今日任务" : "当天任务"}
-            </h2>
-            {filteredTasks.length === 0 ? (
-              <p className="text-sm text-gray-400">
-                {isToday ? "今天还没有任务，试着记录一个小目标吧。" : "这一天还没有任务，试着补记一个目标吧。"}
-              </p>
-            ) : (
+        {/* =============== 2. 任务列表视图 (Tasks) =============== */}
+        {viewMode === "tasks" && (
+          <div className="flex flex-col h-full bg-white">
+            <header className="px-5 pt-4 pb-3 border-b border-gray-100 flex items-center justify-between bg-[#fdfcf9]">
+              <button type="button" onClick={() => setViewMode("home")} className="p-2 -ml-2 text-gray-500 hover:text-gray-800 active:scale-95 transition-transform">
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+              <span className="text-base font-semibold text-gray-900">{selectedDateLabel} - 任务</span>
+              <div className="w-9" />
+            </header>
+
+            <main className="flex-1 px-5 pt-4 pb-24 overflow-y-auto bg-gradient-to-b from-[#fdfcf9] to-white">
               <AnimatePresence initial={false}>
-                {filteredTasks.map((task) => (
-                  <TaskItem
-                    key={task.id}
-                    task={task}
-                    onToggle={handleToggleTask}
-                    onDelete={handleDeleteTask}
-                    highlight={task.id === highlightTaskId}
-                  />
-                ))}
+                {filteredTasks.length === 0 ? (
+                  <p className="text-sm text-gray-400 mt-4 text-center">还没有添加任务，在下方输入吧。</p>
+                ) : (
+                  filteredTasks.map((task) => (
+                    <TaskItem
+                      key={task.id}
+                      task={task}
+                      onToggle={handleToggleTask}
+                      onDelete={handleDeleteTask}
+                      highlight={task.id === highlightTaskId}
+                    />
+                  ))
+                )}
               </AnimatePresence>
-            )}
-          </section>
-        </main>
+            </main>
 
-        {/* 底部输入区 */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center pb-4">
-          <div className="pointer-events-auto w-full px-4">
-            <div className="mx-auto w-full max-w-md rounded-full bg-white shadow-lg shadow-gray-200/70 border border-gray-100 px-3.5 py-2.5 flex items-center gap-2.5">
-              <input
-                type="text"
-                placeholder="快速记录一个任务或想法…"
-                className="flex-1 bg-transparent outline-none text-base text-gray-900 placeholder:text-gray-400"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleInputKeyDown}
-              />
-              <button
-                type="button"
-                className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-indigo-500 text-white shadow-sm active:scale-95 transition-transform disabled:opacity-40 disabled:active:scale-100"
-                disabled={!input.trim()}
-                onClick={handleAddTask}
-              >
-                <Send className="h-4 w-4" />
-              </button>
+            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-white via-white to-transparent pb-4 pt-8">
+              <div className="px-4">
+                <div className="mx-auto w-full max-w-md rounded-full bg-white shadow-lg border border-gray-100 px-3.5 py-2.5 flex items-center gap-2.5">
+                  <input
+                    type="text"
+                    placeholder="快速记录任务…"
+                    className="flex-1 bg-transparent outline-none text-base text-gray-900 placeholder:text-gray-400"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleInputKeyDown}
+                  />
+                  <button
+                    type="button"
+                    className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-[#9cb3c9] text-white shadow-sm active:scale-95 transition-transform disabled:opacity-40"
+                    disabled={!input.trim()}
+                    onClick={handleAddTask}
+                  >
+                    <Send className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
+        )}
+
+        {/* =============== 3. 日记视图 (Diary) =============== */}
+        {viewMode === "diary" && (
+          <div className="flex flex-col h-full bg-white">
+            <header className="px-5 pt-4 pb-3 border-b border-gray-100 flex items-center justify-between bg-[#fdfcf9]">
+              <button type="button" onClick={() => setViewMode("home")} className="p-2 -ml-2 text-gray-500 hover:text-gray-800 active:scale-95 transition-transform">
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+              <span className="text-base font-semibold text-gray-900">{selectedDateLabel} - 日记</span>
+              {diaryMode === "read" ? (
+                <button type="button" onClick={handleEditDiary} className="text-sm text-[#c2a8a4] font-medium bg-[#c2a8a4]/10 px-3 py-1.5 rounded-full active:scale-95 transition-transform">
+                  {diaries[selectedDate] ? "编辑" : "编写"}
+                </button>
+              ) : (
+                <button type="button" onClick={handleSaveDiary} className="text-sm text-white font-medium bg-[#c2a8a4] px-3 py-1.5 rounded-full shadow-sm active:scale-95 transition-transform">
+                  保存
+                </button>
+              )}
+            </header>
+
+            <main className="flex-1 p-5 overflow-y-auto bg-gradient-to-b from-[#fdfcf9] to-white relative">
+              {diaryMode === "read" ? (
+                <div className="bg-white rounded-2xl p-5 shadow-sm ring-1 ring-gray-100 min-h-[50vh]">
+                  {renderDiaryContent(diaries[selectedDate])}
+                </div>
+              ) : (
+                <div className="relative h-full min-h-[60vh] flex flex-col">
+                  <textarea
+                    autoFocus
+                    value={diaryInput}
+                    onChange={handleDiaryChange}
+                    placeholder="写下今天的日记... (输入 @ 引用今天的任务)"
+                    className="w-full flex-1 p-5 rounded-2xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#c2a8a4]/50 text-base leading-relaxed resize-none bg-slate-50"
+                  />
+                  {showMention && (
+                    <div className="absolute bottom-4 left-4 right-4 bg-white shadow-xl rounded-xl border border-gray-100 overflow-hidden z-10">
+                      <div className="bg-gray-50 px-3 py-2 text-xs text-gray-500 font-medium border-b border-gray-100">
+                        选择要引用的任务
+                      </div>
+                      <div className="max-h-40 overflow-y-auto">
+                        {filteredTasks
+                          .filter((t) => t.text.toLowerCase().includes(mentionQuery))
+                          .map((task) => (
+                            <button
+                              key={task.id}
+                              type="button"
+                              onClick={() => handleSelectMention(task.text)}
+                              className="w-full text-left px-4 py-3 text-sm hover:bg-[#c2a8a4]/10 flex items-center gap-2 border-b border-gray-50 last:border-0"
+                            >
+                              <span className={`w-2 h-2 rounded-full ${task.isCompleted ? "bg-[#c2a8a4]" : "bg-gray-300"}`} />
+                              <span className={task.isCompleted ? "text-gray-500 line-through" : "text-gray-800"}>{task.text}</span>
+                            </button>
+                          ))}
+                        {filteredTasks.filter((t) => t.text.toLowerCase().includes(mentionQuery)).length === 0 && (
+                          <div className="px-4 py-3 text-sm text-gray-400 text-center">没有匹配的任务</div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </main>
+          </div>
+        )}
       </div>
 
       {/* 周报 Drawer（过去 7 天） */}
@@ -760,3 +939,4 @@ function App() {
 }
 
 export default App;
+
