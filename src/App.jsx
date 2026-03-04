@@ -561,7 +561,7 @@ function App() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4 py-6">
       <InstallPrompt />
-      <div className="w-full max-w-md bg-[#fdfcf9] rounded-3xl shadow-xl flex flex-col overflow-hidden relative h-screen max-h-[90vh]">
+      <div className="w-full max-w-md bg-[#fdfcf9] sm:rounded-3xl sm:shadow-xl flex flex-col overflow-hidden relative h-[100dvh] sm:h-screen sm:max-h-[90vh]">
 
         {/* =============== 1. 首页视图 (Home) =============== */}
         {viewMode === "home" && (
@@ -622,8 +622,8 @@ function App() {
 
         {/* =============== 2. 任务列表视图 (Tasks) =============== */}
         {viewMode === "tasks" && (
-          <div className="flex flex-col h-full bg-white">
-            <header className="px-5 pt-4 pb-3 border-b border-gray-100 flex items-center justify-between bg-[#fdfcf9]">
+          <div className="flex flex-col h-full bg-[#fdfcf9]">
+            <header className="px-5 pt-4 pb-3 border-b border-gray-100/50 flex items-center justify-between bg-[#fdfcf9]">
               <button type="button" onClick={() => setViewMode("home")} className="p-2 -ml-2 text-gray-500 hover:text-gray-800 active:scale-95 transition-transform">
                 <ArrowLeft className="w-5 h-5" />
               </button>
@@ -631,7 +631,7 @@ function App() {
               <div className="w-9" />
             </header>
 
-            <main className="flex-1 px-5 pt-4 pb-24 overflow-y-auto bg-gradient-to-b from-[#fdfcf9] to-white">
+            <main className="flex-1 px-5 pt-4 pb-24 overflow-y-auto bg-[#fdfcf9]">
               <AnimatePresence initial={false}>
                 {filteredTasks.length === 0 ? (
                   <p className="text-sm text-gray-400 mt-4 text-center">还没有添加任务，在下方输入吧。</p>
@@ -649,7 +649,7 @@ function App() {
               </AnimatePresence>
             </main>
 
-            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-white via-white to-transparent pb-4 pt-8">
+            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#fdfcf9] via-[#fdfcf9] to-transparent pb-4 pt-8">
               <div className="px-4">
                 <div className="mx-auto w-full max-w-md rounded-full bg-white shadow-lg border border-gray-100 px-3.5 py-2.5 flex items-center gap-2.5">
                   <input
@@ -676,8 +676,8 @@ function App() {
 
         {/* =============== 3. 日记视图 (Diary) =============== */}
         {viewMode === "diary" && (
-          <div className="flex flex-col h-full bg-white">
-            <header className="px-5 pt-4 pb-3 border-b border-gray-100 flex items-center justify-between bg-[#fdfcf9]">
+          <div className="flex flex-col h-full bg-[#fdfcf9]">
+            <header className="px-5 pt-4 pb-3 border-b border-gray-100/50 flex items-center justify-between bg-[#fdfcf9]">
               <button type="button" onClick={() => setViewMode("home")} className="p-2 -ml-2 text-gray-500 hover:text-gray-800 active:scale-95 transition-transform">
                 <ArrowLeft className="w-5 h-5" />
               </button>
@@ -693,7 +693,7 @@ function App() {
               )}
             </header>
 
-            <main className="flex-1 p-5 overflow-y-auto bg-gradient-to-b from-[#fdfcf9] to-white relative">
+            <main className="flex-1 p-5 overflow-y-auto bg-[#fdfcf9] relative">
               {diaryMode === "read" ? (
                 <div className="bg-white rounded-2xl p-5 shadow-sm ring-1 ring-gray-100 min-h-[50vh]">
                   {renderDiaryContent(diaries[selectedDate])}
@@ -705,7 +705,7 @@ function App() {
                     value={diaryInput}
                     onChange={handleDiaryChange}
                     placeholder="写下今天的日记... (输入 @ 引用今天的任务)"
-                    className="w-full flex-1 p-5 rounded-2xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#c2a8a4]/50 text-base leading-relaxed resize-none bg-slate-50"
+                    className="w-full flex-1 p-5 rounded-2xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#c2a8a4]/50 text-base leading-relaxed resize-none bg-white/80"
                   />
                   {showMention && (
                     <div className="absolute bottom-4 left-4 right-4 bg-white shadow-xl rounded-xl border border-gray-100 overflow-hidden z-10">
@@ -939,4 +939,5 @@ function App() {
 }
 
 export default App;
+
 
