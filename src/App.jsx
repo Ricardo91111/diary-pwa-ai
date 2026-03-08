@@ -1,55 +1,58 @@
 // src/App.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useAnimationControls } from "framer-motion";
-import { ArrowLeft, Book, CheckSquare, ChevronLeft, ChevronRight, Copy, FileText, Send, Trash2, X } from "lucide-react";
+import {
+  ArrowLeft,
+  Book,
+  Calendar,
+  CheckCircle2,
+  CheckSquare,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  FileText,
+  Loader2,
+  Mail,
+  MessageCircle,
+  Send,
+  ShieldCheck,
+  Trash2,
+  TrendingUp,
+  X,
+} from "lucide-react";
 import InstallPrompt from "./InstallPrompt.jsx";
-
-const weekdayMap = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
-
-const getTodayKey = () => {
-  const d = new Date();
-  const year = d.getFullYear();
-  const month = `${d.getMonth() + 1}`.padStart(2, "0");
-  const date = `${d.getDate()}`.padStart(2, "0");
-  return `${year}-${month}-${date}`;
-};
-
-const dateKeyToDate = (key) => {
-  const [y, m, d] = key.split("-").map((n) => Number(n));
-  return new Date(y, m - 1, d);
-};
-
-const dateToKey = (d) => {
-  const year = d.getFullYear();
-  const month = `${d.getMonth() + 1}`.padStart(2, "0");
-  const date = `${d.getDate()}`.padStart(2, "0");
-  return `${year}-${month}-${date}`;
-};
-
-const addDaysToKey = (key, deltaDays) => {
-  const d = dateKeyToDate(key);
-  d.setDate(d.getDate() + deltaDays);
-  return dateToKey(d);
-};
-
-// 安全的日期加减：基于 new Date(y, m-1, d)，避免时区字符串解析问题
-const addDays = (dateStr, deltaDays) => addDaysToKey(dateStr, deltaDays);
-
-const formatDateLabel = (key) => {
-  const d = dateKeyToDate(key);
-  const month = d.getMonth() + 1;
-  const date = d.getDate();
-  const weekday = weekdayMap[d.getDay()];
-  return `${month}月${date}日 ${weekday}`;
-};
-
-const weekdayShortMap = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-
-const formatWeekdayShort = (key) => weekdayShortMap[dateKeyToDate(key).getDay()];
-
-const enWeekdayMap = ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"];
+import MonthlyReportDrawer from "./components/MonthlyReportDrawer.jsx";
+import TrendDrawer from "./components/TrendDrawer.jsx";
+import WeeklyReportDrawer from "./components/WeeklyReportDrawer.jsx";
+import {
+  addDaysToKey,
+  dateKeyToDate,
+  enWeekdayMap,
+  formatDateLabel,
+  formatWeekdayShort,
+  getMonthEnd,
+  getMonthStart,
+  getTodayKey,
+} from "./utils/date.js";
+import { getTagLabel, isTagValue, normalizeTag, TASK_TAG_OPTIONS } from "./utils/taskTags.js";
+import { requestAiMonthlySummary, requestAiWeeklySummary } from "./services/ai.js";
+import {
+  buildMonthlyAiPayload,
+  buildWeeklyAiPayload,
+  buildWeeklyMarkdownWithAi,
+  computeMonthlyCalendarGrid,
+  computeMonthlyDetailDayData,
+  computeMonthlyDaysForAi,
+  computeMonthlyReport,
+  computeRecentWeeklyTrends,
+  computeWeeklyReport,
+} from "./utils/reports.js";
+import { copyText } from "./utils/clipboard.js";
 
 const STORAGE_KEY = "diary_tasks";
+
+/** 任务列表筛选项「全部」的 value，仅用于前端筛选状态，不写入任务数据 */
+const TASK_FILTER_ALL = "ALL";
 
 const DIARIES_KEY = "diary_daily_entries";
 
@@ -62,45 +65,7 @@ const getInitialDiaries = () => {
   return {};
 };
 
-const AI_SUMMARY_URL = "/api/weekly-summary";
-const AI_SUMMARY_TIMEOUT_MS = 20000;
-
-async function requestAiWeeklySummary(payload) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), AI_SUMMARY_TIMEOUT_MS);
-  try {
-    const res = await fetch(AI_SUMMARY_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const err = new Error(data?.error || data?.message || `HTTP ${res.status}`);
-      err.status = res.status;
-      err.snippet = data?.snippet;
-      throw err;
-    }
-    if (!data.ok || !data.result) {
-      const err = new Error(data?.error || "invalid_response");
-      err.snippet = data?.snippet;
-      throw err;
-    }
-    return data.result;
-  } catch (e) {
-    clearTimeout(timeoutId);
-    if (e.name === "AbortError") {
-      const err = new Error("timeout");
-      err.isAbort = true;
-      throw err;
-    }
-    throw e;
-  }
-}
-
-function TaskItem({ task, onToggle, onDelete, highlight }) {
+function TaskItem({ task, onToggle, onDelete, highlight, tagLabel }) {
   const controls = useAnimationControls();
   const [isDragging, setIsDragging] = useState(false);
   const DELETE_THRESHOLD = -80;
@@ -178,6 +143,11 @@ function TaskItem({ task, onToggle, onDelete, highlight }) {
         >
           {task.text}
         </p>
+        {tagLabel && (
+          <span className="flex-shrink-0 text-xs px-2 py-0.5 rounded-full bg-gray-200/80 text-gray-600">
+            {tagLabel}
+          </span>
+        )}
       </motion.div>
     </motion.div>
   );
@@ -189,7 +159,12 @@ const getInitialTasks = () => {
     const stored = window.localStorage.getItem(STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored);
-      if (Array.isArray(parsed)) return parsed;
+      if (Array.isArray(parsed)) {
+        return parsed.map((t) => ({
+          ...t,
+          tag: normalizeTag(t.tag)
+        }));
+      }
     }
   } catch {
     // ignore parse errors and fall back to mock data
@@ -201,25 +176,29 @@ const getInitialTasks = () => {
       id: Date.now() - 4000,
       text: "早晨写 5 分钟日记",
       isCompleted: false,
-      date: todayKey
+      date: todayKey,
+      tag: ""
     },
     {
       id: Date.now() - 3000,
       text: "整理今天的三件重要任务",
       isCompleted: true,
-      date: todayKey
+      date: todayKey,
+      tag: ""
     },
     {
       id: Date.now() - 2000,
       text: "晚上复盘今天的情绪与收获",
       isCompleted: false,
-      date: todayKey
+      date: todayKey,
+      tag: ""
     },
     {
       id: Date.now() - 1000,
       text: "为明天预留 10 分钟计划时间",
       isCompleted: true,
-      date: todayKey
+      date: todayKey,
+      tag: ""
     }
   ];
 };
@@ -227,16 +206,25 @@ const getInitialTasks = () => {
 function App() {
   const [tasks, setTasks] = useState(getInitialTasks);
   const [input, setInput] = useState("");
+  const [taskTag, setTaskTag] = useState("");
   const todayKey = useMemo(() => getTodayKey(), []);
   const [selectedDate, setSelectedDate] = useState(todayKey);
+  const [selectedTaskFilterTag, setSelectedTaskFilterTag] = useState(TASK_FILTER_ALL);
   const [highlightTaskId, setHighlightTaskId] = useState(null);
   const highlightTimerRef = useRef(null);
   const [isWeeklyOpen, setIsWeeklyOpen] = useState(false);
+  const [isMonthlyOpen, setIsMonthlyOpen] = useState(false);
+  const [isTrendOpen, setIsTrendOpen] = useState(false);
+  /** 月报 Drawer 内当前选中的日期，用于月历点击与单日详情展示；打开时重置为 selectedDate */
+  const [monthlyDetailDate, setMonthlyDetailDate] = useState(null);
   const [isCopied, setIsCopied] = useState(false);
   const copiedTimerRef = useRef(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState(null);
   const [aiResult, setAiResult] = useState(null);
+  const [monthlyAiLoading, setMonthlyAiLoading] = useState(false);
+  const [monthlyAiError, setMonthlyAiError] = useState(null);
+  const [monthlyAiResult, setMonthlyAiResult] = useState(null);
 
   const [diaries, setDiaries] = useState(getInitialDiaries);
   const [viewMode, setViewMode] = useState("home");
@@ -245,6 +233,10 @@ function App() {
   const [showMention, setShowMention] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionCursorPos, setMentionCursorPos] = useState(null);
+  const [isContactOpen, setIsContactOpen] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [isVerified, setIsVerified] = useState(false);
+  const [copiedType, setCopiedType] = useState("");
 
   const selectedDateLabel = useMemo(() => formatDateLabel(selectedDate), [selectedDate]);
   const isToday = selectedDate === todayKey;
@@ -254,6 +246,12 @@ function App() {
     [tasks, selectedDate]
   );
 
+  /** 任务视图中展示的列表：先按日期，再按选中标签筛选（仅用于任务列表视图） */
+  const displayedTasksInTaskView = useMemo(() => {
+    if (selectedTaskFilterTag === TASK_FILTER_ALL) return filteredTasks;
+    return filteredTasks.filter((t) => normalizeTag(t.tag) === selectedTaskFilterTag);
+  }, [filteredTasks, selectedTaskFilterTag]);
+
   useEffect(() => {
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
@@ -262,16 +260,27 @@ function App() {
     }
   }, [tasks]);
 
+  /** 打开月报 Drawer 时，默认选中 selectedDate；若不在当月则选当月第一天 */
+  useEffect(() => {
+    if (!isMonthlyOpen) return;
+    const start = getMonthStart(selectedDate);
+    const end = getMonthEnd(selectedDate);
+    const inRange = selectedDate >= start && selectedDate <= end;
+    setMonthlyDetailDate(inRange ? selectedDate : start);
+  }, [isMonthlyOpen, selectedDate]);
+
   useEffect(() => {
     return () => {
       if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
     };
   }, []);
 
+  /** 卸载时清理周报/月报复制定时器，避免泄漏 */
   useEffect(() => {
     return () => {
       if (copiedTimerRef.current) window.clearTimeout(copiedTimerRef.current);
       if (copiedWithAiTimerRef.current) window.clearTimeout(copiedWithAiTimerRef.current);
+      if (monthlyCopiedTimerRef.current) window.clearTimeout(monthlyCopiedTimerRef.current);
     };
   }, []);
 
@@ -281,6 +290,13 @@ function App() {
       setAiResult(null);
     }
   }, [isWeeklyOpen]);
+
+  useEffect(() => {
+    if (!isMonthlyOpen) {
+      setMonthlyAiError(null);
+      setMonthlyAiResult(null);
+    }
+  }, [isMonthlyOpen]);
 
   useEffect(() => {
     try {
@@ -297,7 +313,8 @@ function App() {
       id,
       text,
       isCompleted: false,
-      date: selectedDate
+      date: selectedDate,
+      tag: isTagValue(taskTag) ? taskTag : ""
     };
 
     setTasks((prev) => [newTask, ...prev]);
@@ -396,76 +413,70 @@ function App() {
     });
   };
 
-  const weeklyReport = useMemo(() => {
-    const end = selectedDate;
-    const datesAsc = Array.from({ length: 7 }, (_, i) => addDays(end, i - 6)); // D-6 ... D
-    const start = datesAsc[0];
-    const dateSet = new Set(datesAsc);
+  const weeklyReport = useMemo(
+    () => computeWeeklyReport(selectedDate, tasks),
+    [selectedDate, tasks]
+  );
 
-    const tasksInRange = tasks.filter((t) => dateSet.has(t.date));
-    const total = tasksInRange.length;
-    const completed = tasksInRange.filter((t) => t.isCompleted).length;
-    const completionRate = total === 0 ? 0 : Math.round((completed / total) * 100);
+  /** 最近 4 周趋势：以 selectedDate 所在周为最后一周，向前 3 周，共 4 周；每周统计与周报口径一致（连续 7 天，end 为当周最后一天） */
+  const recentWeeklyTrends = useMemo(
+    () => computeRecentWeeklyTrends(selectedDate, tasks),
+    [selectedDate, tasks]
+  );
 
-    const daysAsc = datesAsc.map((date) => ({
-      date,
-      weekdayLabel: formatWeekdayShort(date),
-      tasks: tasks.filter((t) => t.date === date)
-    }));
+  const monthlyReport = useMemo(
+    () => computeMonthlyReport(selectedDate, tasks),
+    [selectedDate, tasks]
+  );
 
-    const daysDesc = [...daysAsc].reverse();
-    const activeDays = daysAsc.filter((d) => d.tasks.length > 0).length;
+  /** 月报月历网格：7 列（周一～周日），每格含 dateKey | null、dayNumber、total、completed、hasDiary */
+  const monthlyCalendarGrid = useMemo(
+    () => computeMonthlyCalendarGrid(selectedDate, tasks, diaries),
+    [selectedDate, tasks, diaries]
+  );
 
-    const markdown = [
-      `# 周报（${start} ~ ${end})`.replace(")", "）").replace("（", "（"), // keep full-width parens
-      `- 总任务：${total}`,
-      `- 已完成：${completed}`,
-      `- 完成率：${completionRate}%`,
-      ""
-    ]
-      .join("\n")
-      .concat(
-        daysDesc
-          .map((day) => {
-            const title = `## ${day.date.slice(5)} ${day.weekdayLabel}`;
-            if (!day.tasks.length) return `${title}\n- 无任务\n`;
-            const lines = day.tasks.map((t) => `- [${t.isCompleted ? "x" : " "}] ${t.text}`);
-            return `${title}\n${lines.join("\n")}\n`;
-          })
-          .join("\n")
-          .trimEnd()
-      );
+  /** 月报单日详情：当前选中日的任务与日记，用于详情卡片 */
+  const monthlyDetailDayData = useMemo(
+    () => computeMonthlyDetailDayData(monthlyDetailDate, selectedDate, tasks, diaries),
+    [monthlyDetailDate, selectedDate, tasks, diaries]
+  );
 
-    return {
-      start,
-      end,
-      total,
-      completed,
-      completionRate,
-      activeDays,
-      daysDesc,
-      markdown
-    };
-  }, [selectedDate, tasks]);
+  /** 本月内有任务或有日记的日期（升序），用于月报 AI payload */
+  const monthlyDaysForAi = useMemo(
+    () => computeMonthlyDaysForAi(selectedDate, tasks, diaries),
+    [selectedDate, tasks, diaries]
+  );
+
+  const hasMonthlyDataForAi = monthlyDaysForAi.length > 0;
+
+  const handleMonthlyAiSummary = async () => {
+    if (!hasMonthlyDataForAi) return;
+    setMonthlyAiError(null);
+    setMonthlyAiLoading(true);
+    const payload = buildMonthlyAiPayload(monthlyReport, monthlyDaysForAi);
+    try {
+      const result = await requestAiMonthlySummary(payload);
+      setMonthlyAiResult(result);
+    } catch (e) {
+      console.error("[Monthly AI Summary]", e?.message);
+      const message =
+        e?.isAbort || e?.message === "timeout"
+          ? "请求超时，请稍后重试"
+          : e?.message === "Failed to fetch"
+            ? "网络错误，请检查后端是否启动"
+            : e?.snippet
+              ? `请求失败：${String(e.snippet).slice(0, 60)}…`
+              : `请求失败：${e?.message || "未知错误"}`;
+      setMonthlyAiError(message);
+    } finally {
+      setMonthlyAiLoading(false);
+    }
+  };
 
   const handleAiSummary = async () => {
     setAiError(null);
     setAiLoading(true);
-    const daysAsc = [...weeklyReport.daysDesc].reverse();
-    const payload = {
-      range: { start: weeklyReport.start, end: weeklyReport.end },
-      stats: {
-        total: weeklyReport.total,
-        completed: weeklyReport.completed,
-        completionRate: weeklyReport.completionRate,
-        activeDays: weeklyReport.activeDays
-      },
-      days: daysAsc.map((d) => ({
-        date: d.date,
-        weekdayLabel: d.weekdayLabel,
-        tasks: d.tasks.map((t) => ({ text: t.text, isCompleted: t.isCompleted }))
-      }))
-    };
+    const payload = buildWeeklyAiPayload(weeklyReport, diaries);
     try {
       const result = await requestAiWeeklySummary(payload);
       setAiResult(result);
@@ -485,83 +496,43 @@ function App() {
     }
   };
 
-  const getMarkdownWithAi = () => {
-    let text = weeklyReport.markdown;
-    if (aiResult) {
-      const lines = ["\n---\n\n## AI 点评\n", `${aiResult.comment}\n`];
-      if (aiResult.highlights?.length) {
-        lines.push("**亮点**\n");
-        aiResult.highlights.slice(0, 3).forEach((h) => lines.push(`- ${h}\n`));
-      }
-      if (aiResult.suggestions?.length) {
-        lines.push("\n**建议**\n");
-        aiResult.suggestions.slice(0, 3).forEach((s) => lines.push(`- ${s}\n`));
-      }
-      text += lines.join("");
-    }
-    return text;
-  };
-
   const handleCopyWeekly = async () => {
-    try {
-      await navigator.clipboard.writeText(weeklyReport.markdown);
+    const ok = await copyText(weeklyReport.markdown);
+    if (ok) {
       setIsCopied(true);
       if (copiedTimerRef.current) window.clearTimeout(copiedTimerRef.current);
       copiedTimerRef.current = window.setTimeout(() => setIsCopied(false), 2000);
-    } catch {
-      try {
-        const el = document.createElement("textarea");
-        el.value = weeklyReport.markdown;
-        el.setAttribute("readonly", "true");
-        el.style.position = "fixed";
-        el.style.left = "-9999px";
-        document.body.appendChild(el);
-        el.select();
-        document.execCommand("copy");
-        document.body.removeChild(el);
-        setIsCopied(true);
-        if (copiedTimerRef.current) window.clearTimeout(copiedTimerRef.current);
-        copiedTimerRef.current = window.setTimeout(() => setIsCopied(false), 2000);
-      } catch {
-        // ignore
-      }
     }
   };
 
   const [isCopiedWithAi, setIsCopiedWithAi] = useState(false);
   const copiedWithAiTimerRef = useRef(null);
+  const [isMonthlyCopied, setIsMonthlyCopied] = useState(false);
+  const monthlyCopiedTimerRef = useRef(null);
 
   const handleCopyWithAi = async () => {
-    const text = getMarkdownWithAi();
-    try {
-      await navigator.clipboard.writeText(text);
+    const text = buildWeeklyMarkdownWithAi(weeklyReport.markdown, aiResult);
+    const ok = await copyText(text);
+    if (ok) {
       setIsCopiedWithAi(true);
       if (copiedWithAiTimerRef.current) window.clearTimeout(copiedWithAiTimerRef.current);
       copiedWithAiTimerRef.current = window.setTimeout(() => setIsCopiedWithAi(false), 2000);
-    } catch {
-      try {
-        const el = document.createElement("textarea");
-        el.value = text;
-        el.setAttribute("readonly", "true");
-        el.style.position = "fixed";
-        el.style.left = "-9999px";
-        document.body.appendChild(el);
-        el.select();
-        document.execCommand("copy");
-        document.body.removeChild(el);
-        setIsCopiedWithAi(true);
-        if (copiedWithAiTimerRef.current) window.clearTimeout(copiedWithAiTimerRef.current);
-        copiedWithAiTimerRef.current = window.setTimeout(() => setIsCopiedWithAi(false), 2000);
-      } catch {
-        // ignore
-      }
+    }
+  };
+
+  const handleCopyMonthly = async () => {
+    const ok = await copyText(monthlyReport.markdown);
+    if (ok) {
+      setIsMonthlyCopied(true);
+      if (monthlyCopiedTimerRef.current) window.clearTimeout(monthlyCopiedTimerRef.current);
+      monthlyCopiedTimerRef.current = window.setTimeout(() => setIsMonthlyCopied(false), 2000);
     }
   };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4 py-6">
       <InstallPrompt />
-      <div className="w-full max-w-md bg-[#fdfcf9] rounded-3xl shadow-xl flex flex-col overflow-hidden relative h-screen max-h-[90vh]">
+      <div className="w-full max-w-md bg-[#fdfcf9] sm:rounded-3xl sm:shadow-xl flex flex-col overflow-hidden relative h-[100dvh] sm:h-screen sm:max-h-[90vh]">
 
         {/* =============== 1. 首页视图 (Home) =============== */}
         {viewMode === "home" && (
@@ -570,9 +541,17 @@ function App() {
               <button type="button" onClick={handlePrevDay} className="p-2.5 rounded-full border border-gray-200 text-gray-400 bg-white hover:text-gray-600 active:scale-95 transition-transform">
                 <ChevronLeft className="w-4 h-4" />
               </button>
-              <button type="button" onClick={() => setIsWeeklyOpen(true)} className="p-2.5 rounded-full border border-gray-200 text-gray-500 bg-white hover:bg-gray-50 active:scale-95 transition-transform">
-                <FileText className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => setIsWeeklyOpen(true)} className="p-2.5 rounded-full border border-gray-200 text-gray-500 bg-white hover:bg-gray-50 active:scale-95 transition-transform" title="周报">
+                  <FileText className="w-4 h-4" />
+                </button>
+                <button type="button" onClick={() => setIsMonthlyOpen(true)} className="p-2.5 rounded-full border border-gray-200 text-gray-500 bg-white hover:bg-gray-50 active:scale-95 transition-transform" title="月报">
+                  <Calendar className="w-4 h-4" />
+                </button>
+                <button type="button" onClick={() => setIsTrendOpen(true)} className="p-2.5 rounded-full border border-gray-200 text-gray-500 bg-white hover:bg-gray-50 active:scale-95 transition-transform" title="趋势">
+                  <TrendingUp className="w-4 h-4" />
+                </button>
+              </div>
               <button type="button" onClick={handleNextDay} className="p-2.5 rounded-full border border-gray-200 text-gray-400 bg-white hover:text-gray-600 active:scale-95 transition-transform">
                 <ChevronRight className="w-4 h-4" />
               </button>
@@ -617,13 +596,27 @@ function App() {
                 </div>
               </button>
             </div>
+            {/* 反馈与联系入口 */}
+            <div className="pb-8 pt-2 flex justify-center w-full">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsContactOpen(true);
+                  setIsVerified(false);
+                }}
+                className="text-xs text-gray-400 hover:text-[#c2a8a4] active:scale-95 transition-all flex items-center gap-1.5"
+              >
+                <MessageCircle className="w-3.5 h-3.5" />
+                <span>联系开发者 / 反馈建议</span>
+              </button>
+            </div>
           </div>
         )}
 
         {/* =============== 2. 任务列表视图 (Tasks) =============== */}
         {viewMode === "tasks" && (
-          <div className="flex flex-col h-full bg-white">
-            <header className="px-5 pt-4 pb-3 border-b border-gray-100 flex items-center justify-between bg-[#fdfcf9]">
+          <div className="flex flex-col h-full bg-[#fdfcf9]">
+            <header className="px-5 pt-4 pb-3 border-b border-gray-100/50 flex items-center justify-between bg-[#fdfcf9]">
               <button type="button" onClick={() => setViewMode("home")} className="p-2 -ml-2 text-gray-500 hover:text-gray-800 active:scale-95 transition-transform">
                 <ArrowLeft className="w-5 h-5" />
               </button>
@@ -631,53 +624,91 @@ function App() {
               <div className="w-9" />
             </header>
 
-            <main className="flex-1 px-5 pt-4 pb-24 overflow-y-auto bg-gradient-to-b from-[#fdfcf9] to-white">
+            {/* 按标签筛选：仅任务列表视图 */}
+            <div className="px-5 py-2 border-b border-gray-100/50 bg-[#fdfcf9] overflow-x-auto">
+              <div className="flex gap-2 min-w-0">
+                {[{ value: TASK_FILTER_ALL, label: "全部" }, ...TASK_TAG_OPTIONS].map((opt) => (
+                  <button
+                    key={opt.value === "" ? "_empty" : opt.value}
+                    type="button"
+                    onClick={() => setSelectedTaskFilterTag(opt.value)}
+                    className={`flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                      selectedTaskFilterTag === opt.value
+                        ? "bg-[#9cb3c9] text-white"
+                        : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <main className="flex-1 px-5 pt-4 pb-24 overflow-y-auto bg-[#fdfcf9]">
               <AnimatePresence initial={false}>
-                {filteredTasks.length === 0 ? (
-                  <p className="text-sm text-gray-400 mt-4 text-center">还没有添加任务，在下方输入吧。</p>
+                {displayedTasksInTaskView.length === 0 ? (
+                  <p className="text-sm text-gray-400 mt-4 text-center">
+                    {filteredTasks.length === 0
+                      ? "还没有添加任务，在下方输入吧。"
+                      : "当前标签下还没有任务。"}
+                  </p>
                 ) : (
-                  filteredTasks.map((task) => (
+                  displayedTasksInTaskView.map((task) => (
                     <TaskItem
                       key={task.id}
                       task={task}
                       onToggle={handleToggleTask}
                       onDelete={handleDeleteTask}
                       highlight={task.id === highlightTaskId}
+                      tagLabel={getTagLabel(task.tag)}
                     />
                   ))
                 )}
               </AnimatePresence>
             </main>
 
-            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-white via-white to-transparent pb-4 pt-8">
+            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#fdfcf9] via-[#fdfcf9] to-transparent pb-4 pt-8">
               <div className="px-4">
-                <div className="mx-auto w-full max-w-md rounded-full bg-white shadow-lg border border-gray-100 px-3.5 py-2.5 flex items-center gap-2.5">
-                  <input
-                    type="text"
-                    placeholder="快速记录任务…"
-                    className="flex-1 bg-transparent outline-none text-base text-gray-900 placeholder:text-gray-400"
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={handleInputKeyDown}
-                  />
-                  <button
-                    type="button"
-                    className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-[#9cb3c9] text-white shadow-sm active:scale-95 transition-transform disabled:opacity-40"
-                    disabled={!input.trim()}
-                    onClick={handleAddTask}
-                  >
-                    <Send className="h-4 w-4" />
-                  </button>
+                <div className="mx-auto w-full max-w-md rounded-full bg-white shadow-lg border border-gray-100 px-3.5 py-2.5 flex items-center gap-2">
+                    <select
+                      value={taskTag}
+                      onChange={(e) => setTaskTag(e.target.value)}
+                      className="flex-shrink-0 text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:ring-1 focus:ring-[#9cb3c9]"
+                      aria-label="任务标签"
+                    >
+                      <option value="">未分类</option>
+                      {TASK_TAG_OPTIONS.filter((o) => o.value !== "").map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      placeholder="快速记录任务…"
+                      className="flex-1 bg-transparent outline-none text-base text-gray-900 placeholder:text-gray-400"
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={handleInputKeyDown}
+                    />
+                    <button
+                      type="button"
+                      className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-[#9cb3c9] text-white shadow-sm active:scale-95 transition-transform disabled:opacity-40"
+                      disabled={!input.trim()}
+                      onClick={handleAddTask}
+                    >
+                      <Send className="h-4 w-4" />
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
         )}
 
         {/* =============== 3. 日记视图 (Diary) =============== */}
         {viewMode === "diary" && (
-          <div className="flex flex-col h-full bg-white">
-            <header className="px-5 pt-4 pb-3 border-b border-gray-100 flex items-center justify-between bg-[#fdfcf9]">
+          <div className="flex flex-col h-full bg-[#fdfcf9]">
+            <header className="px-5 pt-4 pb-3 border-b border-gray-100/50 flex items-center justify-between bg-[#fdfcf9]">
               <button type="button" onClick={() => setViewMode("home")} className="p-2 -ml-2 text-gray-500 hover:text-gray-800 active:scale-95 transition-transform">
                 <ArrowLeft className="w-5 h-5" />
               </button>
@@ -693,7 +724,7 @@ function App() {
               )}
             </header>
 
-            <main className="flex-1 p-5 overflow-y-auto bg-gradient-to-b from-[#fdfcf9] to-white relative">
+            <main className="flex-1 p-5 overflow-y-auto bg-[#fdfcf9] relative">
               {diaryMode === "read" ? (
                 <div className="bg-white rounded-2xl p-5 shadow-sm ring-1 ring-gray-100 min-h-[50vh]">
                   {renderDiaryContent(diaries[selectedDate])}
@@ -705,7 +736,7 @@ function App() {
                     value={diaryInput}
                     onChange={handleDiaryChange}
                     placeholder="写下今天的日记... (输入 @ 引用今天的任务)"
-                    className="w-full flex-1 p-5 rounded-2xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#c2a8a4]/50 text-base leading-relaxed resize-none bg-slate-50"
+                    className="w-full flex-1 p-5 rounded-2xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#c2a8a4]/50 text-base leading-relaxed resize-none bg-white/80"
                   />
                   {showMention && (
                     <div className="absolute bottom-4 left-4 right-4 bg-white shadow-xl rounded-xl border border-gray-100 overflow-hidden z-10">
@@ -740,196 +771,153 @@ function App() {
       </div>
 
       {/* 周报 Drawer（过去 7 天） */}
+      <WeeklyReportDrawer
+        open={isWeeklyOpen}
+        onClose={() => setIsWeeklyOpen(false)}
+        weeklyReport={weeklyReport}
+        aiLoading={aiLoading}
+        aiError={aiError}
+        aiResult={aiResult}
+        isCopied={isCopied}
+        isCopiedWithAi={isCopiedWithAi}
+        onAiSummary={handleAiSummary}
+        onCopyWeekly={handleCopyWeekly}
+        onCopyWithAi={handleCopyWithAi}
+        getTagLabel={getTagLabel}
+        taskTagOptions={TASK_TAG_OPTIONS}
+      />
+
+      <MonthlyReportDrawer
+        open={isMonthlyOpen}
+        onClose={() => setIsMonthlyOpen(false)}
+        monthlyReport={monthlyReport}
+        monthlyCalendarGrid={monthlyCalendarGrid}
+        monthlyDetailDate={monthlyDetailDate}
+        monthlyDetailDayData={monthlyDetailDayData}
+        selectedDate={selectedDate}
+        monthlyAiLoading={monthlyAiLoading}
+        monthlyAiError={monthlyAiError}
+        monthlyAiResult={monthlyAiResult}
+        hasMonthlyDataForAi={hasMonthlyDataForAi}
+        isMonthlyCopied={isMonthlyCopied}
+        onSelectDetailDate={setMonthlyDetailDate}
+        onMonthlyAiSummary={handleMonthlyAiSummary}
+        onCopyMonthly={handleCopyMonthly}
+        getTagLabel={getTagLabel}
+        normalizeTag={normalizeTag}
+        taskTagOptions={TASK_TAG_OPTIONS}
+        dateKeyToDate={dateKeyToDate}
+        getMonthStart={getMonthStart}
+      />
+
+      {/* 趋势 Drawer（最近 4 周） */}
+      <TrendDrawer
+        open={isTrendOpen}
+        onClose={() => setIsTrendOpen(false)}
+        weeks={recentWeeklyTrends}
+      />
+
+      {/* =============== 开发者联系方式弹窗 =============== */}
       <AnimatePresence>
-        {isWeeklyOpen && (
+        {isContactOpen && (
           <motion.div
-            className="fixed inset-0 z-50"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
+            className="absolute inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm px-5"
           >
-            {/* 遮罩 */}
-            <button
-              type="button"
-              className="absolute inset-0 bg-black/30"
-              onClick={() => setIsWeeklyOpen(false)}
-              aria-label="关闭周报"
-            />
-
-            {/* 抽屉 */}
             <motion.div
-              className="absolute inset-x-0 bottom-0 mx-auto w-full max-w-md rounded-t-3xl bg-white shadow-2xl overflow-hidden"
-              initial={{ y: 24 }}
-              animate={{ y: 0 }}
-              exit={{ y: 24 }}
-              transition={{ type: "spring", stiffness: 420, damping: 38 }}
-              onClick={(e) => e.stopPropagation()}
+              initial={{ scale: 0.95, opacity: 0, y: 10 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 10 }}
+              className="w-full max-w-sm bg-[#fdfcf9] rounded-3xl p-6 shadow-2xl border border-gray-100/50 flex flex-col items-center relative"
             >
-              <div className="px-5 pt-4 pb-3 border-b border-gray-100">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h3 className="text-base font-semibold text-gray-900">周报（过去7天）</h3>
-                    <p className="mt-0.5 text-sm text-gray-500">
-                      {weeklyReport.start} ~ {weeklyReport.end}
-                    </p>
+              <button
+                type="button"
+                onClick={() => setIsContactOpen(false)}
+                className="absolute top-4 right-4 p-1.5 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              {!isVerified ? (
+                <div className="flex flex-col items-center py-6">
+                  <div className="w-16 h-16 bg-[#9cb3c9]/10 rounded-full flex items-center justify-center mb-4 text-[#9cb3c9]">
+                    <ShieldCheck className="w-8 h-8" />
                   </div>
+                  <h3 className="text-lg font-semibold text-gray-800 mb-2">安全验证</h3>
+                  <p className="text-sm text-gray-500 text-center mb-6">
+                    为了防止恶意采集，请点击下方按钮<br />以查看开发者联系方式。
+                  </p>
                   <button
                     type="button"
-                    className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 text-gray-500 bg-white active:scale-95 transition-transform"
-                    onClick={() => setIsWeeklyOpen(false)}
-                    aria-label="关闭"
+                    onClick={() => {
+                      setIsVerifying(true);
+                      setTimeout(() => {
+                        setIsVerifying(false);
+                        setIsVerified(true);
+                      }, 1200);
+                    }}
+                    disabled={isVerifying}
+                    className="w-full max-w-[200px] py-3 rounded-2xl bg-[#9cb3c9] text-white font-medium shadow-md shadow-[#9cb3c9]/30 active:scale-95 transition-all flex justify-center items-center gap-2"
                   >
-                    <X className="h-4 w-4" />
+                    {isVerifying ? (
+                      <><Loader2 className="w-4 h-4 animate-spin" /> 验证中...</>
+                    ) : (
+                      "点击进行人机验证"
+                    )}
                   </button>
                 </div>
+              ) : (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="w-full pt-2 pb-2"
+                >
+                  <div className="w-12 h-12 bg-green-50 rounded-full flex items-center justify-center mb-4 mx-auto text-green-500">
+                    <CheckCircle2 className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-gray-800 mb-6 text-center">联系开发者</h3>
 
-                <div className="mt-3 grid grid-cols-3 gap-2">
-                  <div className="rounded-2xl bg-slate-50 ring-1 ring-slate-50 ring-inset px-3 py-2">
-                    <div className="text-xs text-gray-500">总任务</div>
-                    <div className="mt-0.5 text-lg font-semibold text-gray-900">
-                      {weeklyReport.total}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between p-3.5 bg-white/80 rounded-2xl border border-gray-100">
+                      <div className="flex items-center gap-3 text-gray-600">
+                        <MessageCircle className="w-5 h-5 text-[#9cb3c9]" />
+                        <span className="font-medium tracking-wide">1773217335</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText("1773217335");
+                          setCopiedType("qq");
+                          setTimeout(() => setCopiedType(""), 2000);
+                        }}
+                        className="px-3 py-1.5 bg-[#fdfcf9] text-xs text-gray-500 rounded-xl hover:text-[#9cb3c9] transition-colors flex items-center gap-1 border border-gray-100"
+                      >
+                        {copiedType === "qq" ? <span className="text-green-500">已复制</span> : <><Copy className="w-3 h-3" /> 复制</>}
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between p-3.5 bg-white/80 rounded-2xl border border-gray-100">
+                      <div className="flex items-center gap-3 text-gray-600">
+                        <Mail className="w-5 h-5 text-[#c2a8a4]" />
+                        <span className="font-medium text-sm">1773217335@qq.com</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText("1773217335@qq.com");
+                          setCopiedType("email");
+                          setTimeout(() => setCopiedType(""), 2000);
+                        }}
+                        className="px-3 py-1.5 bg-[#fdfcf9] text-xs text-gray-500 rounded-xl hover:text-[#c2a8a4] transition-colors flex items-center gap-1 border border-gray-100"
+                      >
+                        {copiedType === "email" ? <span className="text-green-500">已复制</span> : <><Copy className="w-3 h-3" /> 复制</>}
+                      </button>
                     </div>
                   </div>
-                  <div className="rounded-2xl bg-slate-50 ring-1 ring-slate-50 ring-inset px-3 py-2">
-                    <div className="text-xs text-gray-500">已完成</div>
-                    <div className="mt-0.5 text-lg font-semibold text-gray-900">
-                      {weeklyReport.completed}
-                    </div>
-                  </div>
-                  <div className="rounded-2xl bg-slate-50 ring-1 ring-slate-50 ring-inset px-3 py-2">
-                    <div className="text-xs text-gray-500">完成率</div>
-                    <div className="mt-0.5 text-lg font-semibold text-gray-900">
-                      {weeklyReport.completionRate}%
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* AI 总结 */}
-              <div className="px-5 py-3 border-b border-gray-100 space-y-3">
-                <button
-                  type="button"
-                  disabled={aiLoading}
-                  className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-100 text-indigo-700 px-4 py-2.5 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed active:scale-[0.99] transition-transform"
-                  onClick={handleAiSummary}
-                >
-                  {aiLoading ? "生成中…" : "AI总结"}
-                </button>
-                {aiError && (
-                  <div className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700 flex flex-col gap-2">
-                    <p className="break-words">{aiError}</p>
-                    <button
-                      type="button"
-                      className="self-start rounded-lg bg-red-100 px-3 py-1.5 text-sm font-medium text-red-800 active:scale-95"
-                      onClick={handleAiSummary}
-                    >
-                      重试
-                    </button>
-                  </div>
-                )}
-                {aiResult && !aiLoading && (
-                  <div className="rounded-xl bg-slate-50 ring-1 ring-slate-50 ring-inset px-3 py-2.5 space-y-2 text-sm">
-                    <p className="text-gray-800">{aiResult.comment}</p>
-                    {aiResult.highlights?.length > 0 && (
-                      <div>
-                        <span className="font-medium text-gray-600">亮点 </span>
-                        <ul className="mt-0.5 list-disc list-inside text-gray-700">
-                          {aiResult.highlights.slice(0, 3).map((h, i) => (
-                            <li key={i}>{h}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    {aiResult.suggestions?.length > 0 && (
-                      <div>
-                        <span className="font-medium text-gray-600">建议 </span>
-                        <ul className="mt-0.5 list-disc list-inside text-gray-700">
-                          {aiResult.suggestions.slice(0, 3).map((s, i) => (
-                            <li key={i}>{s}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div className="max-h-[65vh] overflow-y-auto px-5 py-4 pb-24 bg-gradient-to-b from-white via-white to-gray-50">
-                <div className="space-y-4">
-                  {weeklyReport.daysDesc.map((day) => (
-                    <section key={day.date}>
-                      <div className="flex items-center justify-between">
-                        <h4 className="text-sm font-semibold text-gray-900">
-                          {day.date.slice(5)} {day.weekdayLabel}
-                        </h4>
-                        <span className="text-xs text-gray-400">{day.date}</span>
-                      </div>
-
-                      <div className="mt-2 rounded-2xl bg-slate-50 ring-1 ring-slate-50 ring-inset px-3 py-2.5">
-                        {day.tasks.length === 0 ? (
-                          <p className="text-sm text-gray-400">无任务</p>
-                        ) : (
-                          <ul className="space-y-1.5">
-                            {day.tasks.map((t) => (
-                              <li
-                                key={t.id}
-                                className={`text-sm ${
-                                  t.isCompleted ? "text-gray-500" : "text-gray-800"
-                                }`}
-                              >
-                                <span className="font-mono">
-                                  - [{t.isCompleted ? "x" : " "}]
-                                </span>{" "}
-                                <span className={t.isCompleted ? "line-through" : ""}>
-                                  {t.text}
-                                </span>
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-                    </section>
-                  ))}
-                </div>
-              </div>
-
-              {/* 底部复制按钮 */}
-              <div className="absolute inset-x-0 bottom-0 bg-white/90 backdrop-blur border-t border-gray-100 px-5 py-3 flex flex-col gap-2">
-                <button
-                  type="button"
-                  className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-indigo-500 text-white px-4 py-3 font-medium shadow-sm active:scale-[0.99] transition-transform"
-                  onClick={handleCopyWeekly}
-                >
-                  {isCopied ? (
-                    <>
-                      <Copy className="h-4 w-4" />
-                      已复制
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-4 w-4" />
-                      复制周报（Markdown）
-                    </>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  className="w-full inline-flex items-center justify-center gap-2 rounded-full border border-indigo-500 text-indigo-600 px-4 py-3 font-medium shadow-sm active:scale-[0.99] transition-transform"
-                  onClick={handleCopyWithAi}
-                >
-                  {isCopiedWithAi ? (
-                    <>
-                      <Copy className="h-4 w-4" />
-                      已复制
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-4 w-4" />
-                      复制（含AI点评）
-                    </>
-                  )}
-                </button>
-              </div>
+                </motion.div>
+              )}
             </motion.div>
           </motion.div>
         )}
